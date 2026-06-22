@@ -55,6 +55,7 @@ export const subjectsApi = {
 
 // ---- Attendance ----
 export const attendanceApi = {
+  listAll: async () => postJson('attendanceList'),
   loadForFaculty: async ({ semester, section, facultyId, date }) =>
     postJson('attendanceLoadFaculty', { semester, section, facultyId, date }),
 
@@ -64,9 +65,11 @@ export const attendanceApi = {
   loadForStudent: async ({ rollNo }) => postJson('attendanceLoadStudent', { rollNo }),
 }
 
-// ---- Reports ----
+// ---- Reports / Analytics ----
 export const reportsApi = {
+  dashboardStats: async () => postJson('dashboardStats'),
   studentReport: async ({ rollNo }) => postJson('reportStudent', { rollNo }),
+  subjectReport: async ({ semester } = {}) => postJson('reportSubject', { semester }),
   facultyReport: async ({ facultyId }) => postJson('reportFaculty', { facultyId }),
 }
 

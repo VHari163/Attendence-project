@@ -20,6 +20,19 @@ const SHEET_NAMES = {
   attendance: 'Attendance',
 }
 
+function doGet(e) {
+  const action = (e && e.parameter && e.parameter.action) || ''
+  const message = action
+    ? `Apps Script backend is reachable. Action received: ${action}`
+    : 'Apps Script backend is reachable. Use POST requests with the action parameter.'
+
+  return withCors_(ContentService.createTextOutput(JSON.stringify({
+    ok: true,
+    message,
+    action,
+  })))
+}
+
 function doPost(e) {
   try {
     const action = (e.parameter && e.parameter.action) || ''
@@ -33,6 +46,14 @@ function doPost(e) {
         break
       case 'studentLogin':
         result = { student: studentLogin(body) }
+        break
+
+      // Dashboard / analytics
+      case 'dashboardStats':
+        result = dashboardStats()
+        break
+      case 'attendanceList':
+        result = attendanceList()
         break
 
       // Admin CRUD - Students
@@ -89,6 +110,9 @@ function doPost(e) {
       case 'reportStudent':
         result = reportStudent(body)
         break
+      case 'reportSubject':
+        result = reportSubject(body)
+        break
       case 'reportFaculty':
         result = reportFaculty(body)
         break
@@ -111,14 +135,9 @@ function doOptions(e) {
 function withCors_(output) {
   output.setMimeType(ContentService.MimeType.JSON)
 
-  // Apps Script doesn't provide a perfect way to set arbitrary response headers for Web Apps,
-  // but setting via ContentService allows CORS headers to be included.
-  // NOTE: This works for many deployments; if your browser still blocks, the next step is to use a proxy.
-  output.setHeader('Access-Control-Allow-Origin', '*')
-  output.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
-  output.setHeader('Access-Control-Allow-Headers', 'Content-Type')
-  output.setHeader('Access-Control-Max-Age', '3600')
-
+  // Apps Script TextOutput does not support setHeader for arbitrary CORS headers.
+  // We only set the JSON content type here; the web app can still be called once
+  // the script is deployed with the correct access settings.
   return output
 }
 
@@ -587,6 +606,30 @@ function attendanceLoadStudent(body) {
   return { records: rows }
 }
 
+function attendanceList() {
+  const sh = getSheet_(SHEET_NAMES.attendance)
+  const values = sh.getDataRange().getValues()
+  if (values.length < 2) return { records: [] }
+
+  const headers = values[0]
+  const records = values.slice(1).map((row) => rowToObj_(headers, row))
+  return { records }
+}
+
+function dashboardStats() {
+  const students = studentsList().students || []
+  const subjects = subjectsList().subjects || []
+  const faculty = facultyListBySemester({}).faculty || []
+  const attendance = attendanceList().records || []
+
+  return {
+    students: students.length,
+    faculty: faculty.length,
+    subjects: subjects.length,
+    attendance: attendance.length,
+  }
+}
+
 // ---------------- REPORTS ----------------
 function reportStudent(body) {
   const { rollNo } = body || {}
@@ -622,6 +665,33 @@ function reportStudent(body) {
   }
 }
 
+function reportSubject(body) {
+  const { semester } = body || {}
+  const records = attendanceList().records || []
+
+  const bySubject = {}
+  records.forEach((r) => {
+    const sub = String(r['Subject'] || '').trim()
+    const sem = String(r['Semester'] || '').trim()
+    if (semester && sem !== String(semester).trim()) return
+    if (!sub) return
+    if (!bySubject[sub]) {
+      bySubject[sub] = { subject: sub, total: 0, present: 0, absent: 0 }
+    }
+    const entry = bySubject[sub]
+    entry.total++
+    if (String(r['Status']).toLowerCase() === 'present') entry.present++
+    if (String(r['Status']).toLowerCase() === 'absent') entry.absent++
+  })
+
+  const subjects = Object.values(bySubject).map((item) => ({
+    ...item,
+    percentage: item.total ? Math.round((item.present / item.total) * 100) : 0,
+  }))
+
+  return { subjects }
+}
+
 function reportFaculty(body) {
   const { facultyId } = body || {}
   if (!facultyId) return { error: 'facultyId required' }
@@ -630,33 +700,27 @@ function reportFaculty(body) {
   const subjectsSh = getSheet_(SHEET_NAMES.subjects)
   const subValues = subjectsSh.getDataRange().getValues()
   const subHeaders = subValues[0]
-  const subjects = subValues.length < 2
+  const assignedSubjects = subValues.length < 2
     ? []
     : subValues.slice(1).map((row) => rowToObj_(subHeaders, row)).filter((s) => String(s['Faculty ID']).trim() === String(facultyId).trim())
 
   const attendanceSh = getSheet_(SHEET_NAMES.attendance)
   const values = attendanceSh.getDataRange().getValues()
-  if (values.length < 2) return { facultyId, classesConducted: 0, attendance: [] }
+  if (values.length < 2) return { facultyId, classesConducted: 0, attendanceCount: 0, records: [] }
   const headers = values[0]
 
-  const subjectNames = new Set(subjects.map((s) => String(s['Subject Code'] || s['Subject Name'] || s['Subject']).trim()).filter(Boolean))
-
-  // We store attendance Subject column as the subject string from frontend; treat it as subject name/code.
-  // We'll match against Subject column loosely by checking if Attendance.Subject contains the subject code/name.
   const records = values
     .slice(1)
     .map((row) => rowToObj_(headers, row))
     .filter((r) => {
       const attSub = String(r['Subject']).trim()
-      // match any subject where the attendance contains the assigned subject code or name
-      return subjects.some((s) => {
+      return assignedSubjects.some((s) => {
         const code = String(s['Subject Code'] || '').trim()
         const name = String(s['Subject Name'] || '').trim()
         return (code && attSub === code) || (name && attSub === name)
       })
     })
 
-  // Classes conducted = distinct dates
   const dates = new Set(records.map((r) => String(r['Date']).trim()).filter(Boolean))
 
   return {
