@@ -97,15 +97,31 @@ function doPost(e) {
         result = { error: `Unknown action: ${action}` }
     }
 
-    return ContentService
-      .createTextOutput(JSON.stringify(result))
-      .setMimeType(ContentService.MimeType.JSON)
+    return withCors_(ContentService.createTextOutput(JSON.stringify(result)))
   } catch (err) {
-    return ContentService
-      .createTextOutput(JSON.stringify({ error: String(err) }))
-      .setMimeType(ContentService.MimeType.JSON)
+    return withCors_(ContentService.createTextOutput(JSON.stringify({ error: String(err) })))
   }
 }
+
+function doOptions(e) {
+  // Preflight response for CORS.
+  return withCors_(ContentService.createTextOutput(JSON.stringify({ ok: true })))
+}
+
+function withCors_(output) {
+  output.setMimeType(ContentService.MimeType.JSON)
+
+  // Apps Script doesn't provide a perfect way to set arbitrary response headers for Web Apps,
+  // but setting via ContentService allows CORS headers to be included.
+  // NOTE: This works for many deployments; if your browser still blocks, the next step is to use a proxy.
+  output.setHeader('Access-Control-Allow-Origin', '*')
+  output.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+  output.setHeader('Access-Control-Allow-Headers', 'Content-Type')
+  output.setHeader('Access-Control-Max-Age', '3600')
+
+  return output
+}
+
 
 function getSheet_(name) {
   const ss = SpreadsheetApp.getActiveSpreadsheet()
